@@ -1,0 +1,11 @@
+[package]
+name = "SystemAudioRecorder"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = "0.27"
+egui = "0.27"
+
+[build-dependencies]
+cc = "1.0"
