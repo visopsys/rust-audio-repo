@@ -1,32 +1,66 @@
 import Foundation
 import ScreenCaptureKit
 import AVFoundation
-import AppKit
+import CoreMedia
+
+// C callback type as a Swift function pointer (C convention)
+typealias AudioCallback = @convention(c) (UnsafeRawPointer?, UInt32) -> Void
+
+// global variable to hold the callback pointer
+fileprivate var audioCallback: AudioCallback? = nil
+
+// Exported setter so Rust can pass the callback pointer at runtime
+@_cdecl("set_audio_callback")
+public func set_audio_callback(_ cb: UnsafeRawPointer?) {
+    if let cb = cb {
+        // Convert to typed function pointer
+        let typed = unsafeBitCast(cb, to: AudioCallback.self)
+        audioCallback = typed
+        print("🔗 audio callback set")
+    } else {
+        audioCallback = nil
+        print("🔗 audio callback cleared")
+    }
+}
+
+// Exported start/stop functions that Rust (or other C) can call
+@_cdecl("start_audio_recording")
+public func start_audio_recording() {
+    AudioCaptureManager.shared.startRecording()
+}
+
+@_cdecl("stop_audio_recording")
+public func stop_audio_recording() {
+    AudioCaptureManager.shared.stopRecording()
+}
+
+// MARK: - Audio Capture Manager
 
 @objc public class AudioCaptureManager: NSObject, SCStreamOutput, SCStreamDelegate {
+    public static let shared = AudioCaptureManager()
     private var stream: SCStream?
-    private var assetWriter: AVAssetWriter?
-    private var assetWriterInput: AVAssetWriterInput?
     private var isRecording = false
-    private var outputURL: URL?
 
-    @objc public func startRecording(_ path: NSString) {
-        Task {
-            await start()
-        }
+    public func startRecording() {
+        Task { await start() }
     }
 
-    @objc public func stopRecording() {
-        stop()
+    public func stopRecording() {
+        Task {
+            do {
+                try await stream?.stopCapture()
+                print("🛑 Audio streaming stopped.")
+                isRecording = false
+            } catch {
+                print("❌ Stop error: \(error)")
+            }
+        }
     }
 
     @MainActor
     private func start() async {
         guard !isRecording else { return }
-        print("🎙️ Starting system audio capture…")
-
-        // Save to temporary file first
-        outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("temp_audio.m4a")
+        print("🎙️ Starting live system audio stream…")
 
         do {
             let content = try await SCShareableContent.current
@@ -40,81 +74,34 @@ import AppKit
             config.capturesAudio = true
             config.excludesCurrentProcessAudio = false
 
-            stream = SCStream(filter: filter, configuration: config, delegate: self)
-
-            assetWriter = try AVAssetWriter(outputURL: outputURL!, fileType: .m4a)
-            let settings: [String: Any] = [
-                AVFormatIDKey: kAudioFormatMPEG4AAC,
-                AVSampleRateKey: 44100,
-                AVNumberOfChannelsKey: 2,
-                AVEncoderBitRateKey: 192000
-            ]
-
-            assetWriterInput = AVAssetWriterInput(mediaType: .audio, outputSettings: settings)
-            assetWriterInput?.expectsMediaDataInRealTime = true
-
-            if let input = assetWriterInput, assetWriter?.canAdd(input) == true {
-                assetWriter?.add(input)
-            }
-
-            assetWriter?.startWriting()
-            assetWriter?.startSession(atSourceTime: .zero)
-
-            let audioQueue = DispatchQueue(label: "AudioQueue")
-            try stream?.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue)
-
-            try await stream?.startCapture()
-            isRecording = true
-
-            print("✅ Recording started to temporary file.")
+            let stream = SCStream(filter: filter, configuration: config, delegate: self)
+            try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: DispatchQueue(label: "AudioQueue"))
+            try await stream.startCapture()
+            self.stream = stream
+            self.isRecording = true
+            print("✅ Live audio streaming started.")
         } catch {
             print("❌ Error: \(error)")
         }
     }
 
-    private func stop() {
-        guard isRecording else { return }
-        isRecording = false
-        stream?.stopCapture()
-        assetWriterInput?.markAsFinished()
+    // SCStreamOutput delegate:
+    public func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
+        guard outputType == .audio, isRecording else { return }
+        guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return }
 
-        assetWriter?.finishWriting { [weak self] in
-            guard let self = self, let tempURL = self.outputURL else { return }
-            print("✅ Recording finished: \(tempURL.path)")
+        var lengthAtOffset: Int = 0
+        var totalLength: Int = 0
+        var dataPointer: UnsafeMutablePointer<Int8>?
 
-            // Show save panel to user after recording stops
-            DispatchQueue.main.async {
-                let panel = NSSavePanel()
-                panel.title = "Save System Audio Recording"
-                panel.allowedFileTypes = ["m4a"]
+        let status = CMBlockBufferGetDataPointer(blockBuffer, atOffset: 0, lengthAtOffsetOut: &lengthAtOffset, totalLengthOut: &totalLength, dataPointerOut: &dataPointer)
 
-                // Default name with timestamp
-                let formatter = DateFormatter()
-                formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-                panel.nameFieldStringValue = "Recording_\(formatter.string(from: Date())).m4a"
-
-                if panel.runModal() == .OK, let destURL = panel.url {
-                    do {
-                        try FileManager.default.copyItem(at: tempURL, to: destURL)
-                        print("💾 Saved recording to: \(destURL.path)")
-                    } catch {
-                        print("❌ Failed to save file: \(error)")
-                    }
-                } else {
-                    print("⚠️ Save canceled by user.")
-                }
-
-                // Clean up temporary file
-                try? FileManager.default.removeItem(at: tempURL)
+        if status == noErr, let dataPointer = dataPointer, totalLength > 0 {
+            // Call the C/registered callback with raw bytes
+            if let cb = audioCallback {
+                let rawPtr = UnsafeRawPointer(dataPointer)
+                cb(rawPtr, UInt32(totalLength))
             }
         }
-    }
-
-    public func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
-        guard outputType == .audio,
-              isRecording,
-              let input = assetWriterInput,
-              input.isReadyForMoreMediaData else { return }
-        input.append(sampleBuffer)
     }
 }
