@@ -2,12 +2,15 @@ use std::ffi::c_void;
 use std::thread;
 use std::time::Duration;
 use std::sync::Mutex;
-use hound::{WavWriter, WavSpec};
+use std::fs::File;
+use std::io::Write;
+use std::mem::MaybeUninit;
+use mp3lame_encoder::{Builder, FlushNoGap, InterleavedPcm};
 
-const OUTPUT_FILE: &str = "output.wav";
+const OUTPUT_FILE: &str = "output.mp3";
 
-// Global WAV writer wrapped in a mutex for thread-safe access
-static WAV_WRITER: Mutex<Option<WavWriter<std::io::BufWriter<std::fs::File>>>> = Mutex::new(None);
+// Global MP3 encoder and output buffer
+static MP3_ENCODER: Mutex<Option<(mp3lame_encoder::Encoder, File)>> = Mutex::new(None);
 
 // Link to Swift dylib
 #[link(name = "AudioCapture", kind = "dylib")]
@@ -17,25 +20,34 @@ extern "C" {
     fn stop_audio_recording();
 }
 
-fn init_wav_writer(filename: &str) {
-    // macOS ScreenCaptureKit audio format:
-    // 48kHz sample rate, 2 channels (stereo), 32-bit float, non-interleaved
-    let spec = WavSpec {
-        channels: 2,
-        sample_rate: 48000,
-        bits_per_sample: 32,
-        sample_format: hound::SampleFormat::Float,
-    };
+fn init_mp3_encoder(filename: &str) {
+    // Configure MP3 encoder for high-quality stereo audio
+    let mut encoder = Builder::new().expect("Failed to create MP3 encoder builder");
+    encoder.set_num_channels(2).expect("Failed to set channels");
+    encoder.set_sample_rate(48000).expect("Failed to set sample rate");
+    encoder.set_brate(mp3lame_encoder::Bitrate::Kbps320).expect("Failed to set bitrate");
+    encoder.set_quality(mp3lame_encoder::Quality::Best).expect("Failed to set quality");
 
-    let writer = WavWriter::create(filename, spec).expect("Failed to create WAV file");
-    *WAV_WRITER.lock().unwrap() = Some(writer);
-    println!("💾 WAV writer initialized: {} (stereo, 48kHz, 32-bit float)", filename);
+    let encoder = encoder.build().expect("Failed to build MP3 encoder");
+    let file = File::create(filename).expect("Failed to create MP3 file");
+
+    *MP3_ENCODER.lock().unwrap() = Some((encoder, file));
+    println!("💾 MP3 encoder initialized: {} (stereo, 48kHz, 320kbps)", filename);
 }
 
-fn close_wav_writer() {
-    if let Some(writer) = WAV_WRITER.lock().unwrap().take() {
-        writer.finalize().expect("Failed to finalize WAV file");
-        println!("💾 WAV file finalized");
+fn close_mp3_encoder() {
+    if let Some((mut encoder, mut file)) = MP3_ENCODER.lock().unwrap().take() {
+        // Flush any remaining data
+        let mut mp3_buffer: [MaybeUninit<u8>; 16384] = unsafe { MaybeUninit::uninit().assume_init() };
+        if let Ok(encoded_size) = encoder.flush::<FlushNoGap>(&mut mp3_buffer[..]) {
+            if encoded_size > 0 {
+                let data = unsafe {
+                    std::slice::from_raw_parts(mp3_buffer.as_ptr() as *const u8, encoded_size)
+                };
+                file.write_all(data).expect("Failed to write final MP3 data");
+            }
+        }
+        println!("💾 MP3 file finalized");
     }
 }
 
@@ -56,27 +68,45 @@ extern "C" fn on_audio_data(data: *const u8, length: u32) {
     };
 
     // Audio is non-interleaved (planar): [L, L, L...] [R, R, R...]
-    // WAV needs interleaved: [L, R, L, R, L, R...]
+    // MP3 encoder needs interleaved i16 samples
     let num_samples = samples.len();
     let samples_per_channel = num_samples / 2;
 
     let left_channel = &samples[0..samples_per_channel];
     let right_channel = &samples[samples_per_channel..num_samples];
 
-    // Write samples to WAV file in interleaved format
-    if let Some(writer) = WAV_WRITER.lock().unwrap().as_mut() {
-        for i in 0..samples_per_channel {
-            writer.write_sample(left_channel[i]).expect("Failed to write sample");
-            writer.write_sample(right_channel[i]).expect("Failed to write sample");
-        }
+    // Convert f32 [-1.0, 1.0] to i16 [-32768, 32767] and interleave
+    let mut pcm_data = Vec::with_capacity(num_samples);
+    for i in 0..samples_per_channel {
+        let left_i16 = (left_channel[i].clamp(-1.0, 1.0) * 32767.0) as i16;
+        let right_i16 = (right_channel[i].clamp(-1.0, 1.0) * 32767.0) as i16;
+        pcm_data.push(left_i16);
+        pcm_data.push(right_i16);
     }
 
-    println!("🎧 Wrote {} samples ({} bytes)", num_samples, slice.len());
+    // Encode to MP3
+    if let Some((encoder, file)) = MP3_ENCODER.lock().unwrap().as_mut() {
+        let buffer_size = pcm_data.len() * 5 / 4 + 7200; // LAME recommended buffer size
+        let mut mp3_buffer: Vec<MaybeUninit<u8>> = vec![MaybeUninit::uninit(); buffer_size];
+
+        let input = InterleavedPcm(&pcm_data);
+        match encoder.encode(input, &mut mp3_buffer) {
+            Ok(encoded_size) => {
+                if encoded_size > 0 {
+                    let data = unsafe {
+                        std::slice::from_raw_parts(mp3_buffer.as_ptr() as *const u8, encoded_size)
+                    };
+                    file.write_all(data).expect("Failed to write MP3 data");
+                }
+            }
+            Err(e) => eprintln!("❌ MP3 encoding error: {:?}", e),
+        }
+    }    println!("🎧 Encoded {} samples ({} bytes)", num_samples, slice.len());
 }
 
 fn main() {
-    // Initialize WAV writer
-    init_wav_writer(OUTPUT_FILE);
+    // Initialize MP3 encoder
+    init_mp3_encoder(OUTPUT_FILE);
 
     // Register callback
     let func_ptr = on_audio_data as *const ();
@@ -98,7 +128,7 @@ fn main() {
     unsafe { set_audio_callback(std::ptr::null()) };
     println!("🔗 Callback cleared");
 
-    // Finalize WAV file
-    close_wav_writer();
+    // Finalize MP3 file
+    close_mp3_encoder();
     println!("✅ Recording saved to {}", OUTPUT_FILE);
 }
