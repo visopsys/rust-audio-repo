@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 eframe = "0.27"
 egui = "0.27"
+hound = "3.5"
 
 [build-dependencies]
 cc = "1.0"

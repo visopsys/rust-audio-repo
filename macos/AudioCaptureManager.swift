@@ -87,6 +87,22 @@ public func stop_audio_recording() {
     // SCStreamOutput delegate
     public func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
         guard outputType == .audio, isRecording else { return }
+
+        // Log audio format information
+        if let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer) {
+            let audioStreamBasicDesc = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc)
+            if let desc = audioStreamBasicDesc {
+                print("📊 Audio Format:")
+                print("   Sample Rate: \(desc.pointee.mSampleRate) Hz")
+                print("   Channels: \(desc.pointee.mChannelsPerFrame)")
+                print("   Bits per Channel: \(desc.pointee.mBitsPerChannel)")
+                print("   Bytes per Frame: \(desc.pointee.mBytesPerFrame)")
+                print("   Bytes per Packet: \(desc.pointee.mBytesPerPacket)")
+                print("   Format ID: 0x\(String(format: "%X", desc.pointee.mFormatID))")
+                print("   Format Flags: 0x\(String(format: "%X", desc.pointee.mFormatFlags))")
+            }
+        }
+
         guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return }
 
         var lengthAtOffset: Int = 0
