@@ -1,5 +1,5 @@
 use std::slice;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::mem::MaybeUninit;
 use mp3lame_encoder::{Builder, Encoder, FlushNoGap, InterleavedPcm};
 
@@ -9,7 +9,7 @@ struct GlobalState {
     mp3_data: Vec<u8>,
 }
 
-static mut STATE: Option<Mutex<GlobalState>> = None;
+static STATE: OnceLock<Mutex<GlobalState>> = OnceLock::new();
 
 extern "C" {
     fn set_audio_callback(cb: Option<extern "C" fn(*const u8, u32)>);
@@ -29,25 +29,25 @@ extern "C" fn on_audio(data: *const u8, len: u32) {
             slice::from_raw_parts(data as *const i16, slice.len() / 2)
         };
 
-        unsafe {
-            if let Some(mutex) = &STATE {
-                if let Ok(mut state) = mutex.lock() {
-                    // Reserve enough space for worst case MP3 frame size
-                    let mut mp3_out_buffer = vec![MaybeUninit::uninit(); pcm_data.len()];
-                    let input = InterleavedPcm(pcm_data);
+        if let Some(mutex) = STATE.get() {
+            if let Ok(mut state) = mutex.lock() {
+                // Reserve enough space for worst case MP3 frame size
+                let mut mp3_out_buffer = vec![MaybeUninit::uninit(); pcm_data.len()];
+                let input = InterleavedPcm(pcm_data);
 
-                    match state.encoder.encode(input, &mut mp3_out_buffer) {
-                        Ok(encoded_len) => {
-                            if encoded_len > 0 {
-                                let encoded_slice = slice::from_raw_parts(
+                match state.encoder.encode(input, &mut mp3_out_buffer) {
+                    Ok(encoded_len) => {
+                        if encoded_len > 0 {
+                            let encoded_slice = unsafe {
+                                slice::from_raw_parts(
                                     mp3_out_buffer.as_ptr() as *const u8,
                                     encoded_len
-                                );
-                                state.mp3_data.extend_from_slice(encoded_slice);
-                            }
+                                )
+                            };
+                            state.mp3_data.extend_from_slice(encoded_slice);
                         }
-                        Err(e) => eprintln!("MP3 encode error: {:?}", e),
                     }
+                    Err(e) => eprintln!("MP3 encode error: {:?}", e),
                 }
             }
         }
@@ -63,12 +63,11 @@ fn main() {
     builder.set_quality(mp3lame_encoder::Quality::Best).expect("set quality");
 
     let encoder = builder.build().expect("To initialize MP3 encoder");
-    unsafe {
-        STATE = Some(Mutex::new(GlobalState {
-            encoder,
-            mp3_data: Vec::new(),
-        }));
-    }
+
+    let _ = STATE.set(Mutex::new(GlobalState {
+        encoder,
+        mp3_data: Vec::new(),
+    }));
 
     unsafe { set_audio_callback(Some(on_audio)) };
 
@@ -81,26 +80,26 @@ fn main() {
     unsafe { stop_audio_recording() };
 
     // Flush and save
-    unsafe {
-        if let Some(mutex) = &STATE {
-            if let Ok(mut state) = mutex.lock() {
-                let mut mp3_out_buffer = vec![MaybeUninit::uninit(); 4096];
-                match state.encoder.flush::<FlushNoGap>(&mut mp3_out_buffer) {
-                    Ok(encoded_len) => {
-                        if encoded_len > 0 {
-                            let encoded_slice = slice::from_raw_parts(
+    if let Some(mutex) = STATE.get() {
+        if let Ok(mut state) = mutex.lock() {
+            let mut mp3_out_buffer = vec![MaybeUninit::uninit(); 4096];
+            match state.encoder.flush::<FlushNoGap>(&mut mp3_out_buffer) {
+                Ok(encoded_len) => {
+                    if encoded_len > 0 {
+                        let encoded_slice = unsafe {
+                            slice::from_raw_parts(
                                 mp3_out_buffer.as_ptr() as *const u8,
                                 encoded_len
-                            );
-                            state.mp3_data.extend_from_slice(encoded_slice);
-                        }
-
-                        let path = "output.mp3";
-                        std::fs::write(path, &state.mp3_data).expect("Write mp3 file");
-                        println!("💾 Saved MP3 to {}", path);
+                            )
+                        };
+                        state.mp3_data.extend_from_slice(encoded_slice);
                     }
-                    Err(e) => eprintln!("Flush error: {:?}", e),
+
+                    let path = "output.mp3";
+                    std::fs::write(path, &state.mp3_data).expect("Write mp3 file");
+                    println!("💾 Saved MP3 to {}", path);
                 }
+                Err(e) => eprintln!("Flush error: {:?}", e),
             }
         }
     }
