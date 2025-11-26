@@ -8,12 +8,11 @@ fn main() {
         .args([
             "-emit-library",
             "-o", &format!("{}/libAudioCapture.dylib", out),
-            "macos/AudioCaptureManager.swift",
-            "macos/AudioBridge.swift",
+            "swift/AudioCaptureManager.swift",
             "-framework", "AVFoundation",
             "-framework", "ScreenCaptureKit",
             "-framework", "CoreMedia",
-            "-framework", "CoreAudio"
+            "-framework", "AppKit"
         ])
         .status()
         .expect("Swift compile failed");
