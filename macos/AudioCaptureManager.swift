@@ -157,7 +157,7 @@ import AppKit
     private var audioConverter: AVAudioConverter?
     private var pcmBuffer: AVAudioPCMBuffer?
     private let targetFormat = AVAudioFormat(commonFormat: .pcmFormatInt16,
-                                             sampleRate: 44100,
+                                             sampleRate: 48000,
                                              channels: 2,
                                              interleaved: true)!
 
