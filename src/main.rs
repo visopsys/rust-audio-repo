@@ -54,55 +54,73 @@ extern "C" fn on_audio(data: *const u8, len: u32) {
     }
 }
 
-fn main() {
-    // Initialize MP3 Encoder
-    let mut builder = Builder::new().expect("Create Encoder Builder");
-    builder.set_num_channels(2).expect("set channels");
-    builder.set_sample_rate(48000).expect("set sample rate");
-    builder.set_brate(mp3lame_encoder::Bitrate::Kbps320).expect("set bitrate");
-    builder.set_quality(mp3lame_encoder::Quality::Best).expect("set quality");
+struct AudioRecorder;
 
-    let encoder = builder.build().expect("To initialize MP3 encoder");
+impl AudioRecorder {
+    fn new() -> Self {
+        // Initialize MP3 Encoder
+        let mut builder = Builder::new().expect("Create Encoder Builder");
+        builder.set_num_channels(2).expect("set channels");
+        builder.set_sample_rate(48000).expect("set sample rate");
+        builder.set_brate(mp3lame_encoder::Bitrate::Kbps320).expect("set bitrate");
+        builder.set_quality(mp3lame_encoder::Quality::Best).expect("set quality");
 
-    let _ = STATE.set(Mutex::new(GlobalState {
-        encoder,
-        mp3_data: Vec::new(),
-    }));
+        let encoder = builder.build().expect("To initialize MP3 encoder");
 
-    unsafe { set_audio_callback(Some(on_audio)) };
+        // Initialize global state if not already initialized
+        let _ = STATE.set(Mutex::new(GlobalState {
+            encoder,
+            mp3_data: Vec::new(),
+        }));
 
-    println!("🎙️ Starting recording…");
-    unsafe { start_audio_recording() };
-
-    // Run 15 seconds
-    unsafe { run_main_loop_for(15.0) };
-
-    unsafe { stop_audio_recording() };
-
-    // Flush and save
-    if let Some(mutex) = STATE.get() {
-        if let Ok(mut state) = mutex.lock() {
-            let mut mp3_out_buffer = vec![MaybeUninit::uninit(); 4096];
-            match state.encoder.flush::<FlushNoGap>(&mut mp3_out_buffer) {
-                Ok(encoded_len) => {
-                    if encoded_len > 0 {
-                        let encoded_slice = unsafe {
-                            slice::from_raw_parts(
-                                mp3_out_buffer.as_ptr() as *const u8,
-                                encoded_len
-                            )
-                        };
-                        state.mp3_data.extend_from_slice(encoded_slice);
-                    }
-
-                    let path = "output.mp3";
-                    std::fs::write(path, &state.mp3_data).expect("Write mp3 file");
-                    println!("💾 Saved MP3 to {}", path);
-                }
-                Err(e) => eprintln!("Flush error: {:?}", e),
-            }
-        }
+        AudioRecorder
     }
 
-    println!("🛑 Recording stopped.");
+    fn start_recording(&self) {
+        unsafe { set_audio_callback(Some(on_audio)) };
+        println!("🎙️ Starting recording…");
+        unsafe { start_audio_recording() };
+    }
+
+    fn stop_recording(&self) {
+        unsafe { stop_audio_recording() };
+
+        // Flush and save
+        if let Some(mutex) = STATE.get() {
+            if let Ok(mut state) = mutex.lock() {
+                let mut mp3_out_buffer = vec![MaybeUninit::uninit(); 4096];
+                match state.encoder.flush::<FlushNoGap>(&mut mp3_out_buffer) {
+                    Ok(encoded_len) => {
+                        if encoded_len > 0 {
+                            let encoded_slice = unsafe {
+                                slice::from_raw_parts(
+                                    mp3_out_buffer.as_ptr() as *const u8,
+                                    encoded_len
+                                )
+                            };
+                            state.mp3_data.extend_from_slice(encoded_slice);
+                        }
+
+                        let path = "output.mp3";
+                        std::fs::write(path, &state.mp3_data).expect("Write mp3 file");
+                        println!("💾 Saved MP3 to {}", path);
+                    }
+                    Err(e) => eprintln!("Flush error: {:?}", e),
+                }
+            }
+        }
+
+        println!("🛑 Recording stopped.");
+    }
+}
+
+fn main() {
+    let recorder = AudioRecorder::new();
+
+    recorder.start_recording();
+
+    // Run 10 seconds
+    unsafe { run_main_loop_for(10.0) };
+
+    recorder.stop_recording();
 }
