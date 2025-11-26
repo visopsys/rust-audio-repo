@@ -54,7 +54,9 @@ extern "C" fn on_audio(data: *const u8, len: u32) {
     }
 }
 
-struct AudioRecorder;
+struct AudioRecorder {
+    is_recording: bool,
+}
 
 impl AudioRecorder {
     fn new() -> Self {
@@ -73,16 +75,28 @@ impl AudioRecorder {
             mp3_data: Vec::new(),
         }));
 
-        AudioRecorder
+        AudioRecorder {
+            is_recording: false,
+        }
     }
 
-    fn start_recording(&self) {
+    fn start_recording(&mut self) {
+        if self.is_recording {
+            return;
+        }
+        self.is_recording = true;
+
         unsafe { set_audio_callback(Some(on_audio)) };
         println!("🎙️ Starting recording…");
         unsafe { start_audio_recording() };
     }
 
-    fn stop_recording(&self) {
+    fn stop_recording(&mut self) {
+        if !self.is_recording {
+            return;
+        }
+        self.is_recording = false;
+
         unsafe { stop_audio_recording() };
 
         // Flush and save
@@ -115,7 +129,7 @@ impl AudioRecorder {
 }
 
 fn main() {
-    let recorder = AudioRecorder::new();
+    let mut recorder = AudioRecorder::new();
 
     recorder.start_recording();
 
