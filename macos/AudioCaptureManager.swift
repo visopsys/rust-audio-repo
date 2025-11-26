@@ -153,6 +153,14 @@ import AppKit
         }
     }
 
+    // Audio Conversion
+    private var audioConverter: AVAudioConverter?
+    private var pcmBuffer: AVAudioPCMBuffer?
+    private let targetFormat = AVAudioFormat(commonFormat: .pcmFormatInt16,
+                                             sampleRate: 44100,
+                                             channels: 2,
+                                             interleaved: true)!
+
     // SCStreamOutput callback
     public func stream(_ stream: SCStream,
                        didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
@@ -160,23 +168,50 @@ import AppKit
     {
         guard outputType == .audio, isRecording, CMSampleBufferIsValid(sampleBuffer) else { return }
 
-        if let block = CMSampleBufferGetDataBuffer(sampleBuffer) {
-            var length = 0
-            var dataPointer: UnsafeMutablePointer<Int8>?
-            CMBlockBufferGetDataPointer(block,
-                                        atOffset: 0,
-                                        lengthAtOffsetOut: nil,
-                                        totalLengthOut: &length,
-                                        dataPointerOut: &dataPointer)
+        // 1. Set up converter if needed
+        if audioConverter == nil, let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) {
+            let inputFormat = AVAudioFormat(cmAudioFormatDescription: formatDescription)
+            audioConverter = AVAudioConverter(from: inputFormat, to: targetFormat)
+        }
 
-            print("🎧 Audio buffer: \(length) bytes")
-            if let cb = GLOBAL_AUDIO_CALLBACK, let dataPointer {
-                cb(UnsafeRawPointer(dataPointer), UInt32(length))
-            }
+        // 2. Convert
+        guard let converter = audioConverter else { return }
 
-            if let input = systemAssetInput, input.isReadyForMoreMediaData {
-                input.append(sampleBuffer)
-            }
+        // Create input block
+        var error: NSError? = nil
+        let inputBlock: AVAudioConverterInputBlock = { inNumPackets, outStatus in
+            outStatus.pointee = .haveData
+            return sampleBuffer
+        }
+
+        // Calculate output buffer size (approximate)
+        // We need enough space for the converted data.
+        // Let's allocate a buffer if we haven't, or reuse it.
+        // For simplicity, let's allocate a new buffer each time or reuse a large enough one.
+        // A safer way is to estimate based on sample count.
+        let numSamples = CMSampleBufferGetNumSamples(sampleBuffer)
+        if pcmBuffer == nil || pcmBuffer!.frameCapacity < numSamples {
+             pcmBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: AVAudioFrameCount(numSamples))
+        }
+
+        guard let outputBuffer = pcmBuffer else { return }
+
+        let status = converter.convert(to: outputBuffer, error: &error, withInputFrom: inputBlock)
+
+        if status != .error, let data = outputBuffer.int16ChannelData {
+             // int16ChannelData is UnsafePointer<UnsafeMutablePointer<Int16>>
+             // Since we requested interleaved, data[0] points to the interleaved data.
+             let channelData = data[0]
+             let byteLength = Int(outputBuffer.frameLength * targetFormat.streamDescription.pointee.mBytesPerFrame)
+
+             print("🎧 Audio buffer converted: \(byteLength) bytes")
+             if let cb = GLOBAL_AUDIO_CALLBACK {
+                 cb(UnsafeRawPointer(channelData), UInt32(byteLength))
+             }
+        }
+
+        if let input = systemAssetInput, input.isReadyForMoreMediaData {
+            input.append(sampleBuffer)
         }
     }
 }
