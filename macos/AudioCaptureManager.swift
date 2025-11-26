@@ -33,7 +33,6 @@ import AppKit
     @MainActor
     private func start() async {
         guard !isRecording else { return }
-        print("🎙️ Starting capture…")
 
         do {
             // Invisible AppKit window
@@ -62,12 +61,10 @@ import AppKit
             }
 
             try audioEngine.start()
-            print("🎤 Microphone capture started")
 
             // 2. Start System Capture
             let content = try await SCShareableContent.current
             guard let display = content.displays.first else {
-                print("❌ No display found")
                 return
             }
             let filter = SCContentFilter(display: display, excludingWindows: [])
@@ -78,21 +75,28 @@ import AppKit
 
             try stream?.addStreamOutput(self, type: .audio, sampleHandlerQueue: .global(qos: .userInteractive))
             try await stream?.startCapture()
-            print("✅ System audio capture started")
 
             isRecording = true
         } catch {
-            print("❌ Error: \(error)")
+            // Handle error silently or log to a file if needed
         }
     }
 
     private func stop() {
         guard isRecording else { return }
         isRecording = false
-        stream?.stopCapture()
+
+        if let stream = stream {
+            try? stream.removeStreamOutput(self, type: .audio)
+            stream.stopCapture()
+        }
+        stream = nil
+
         audioEngine.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
-        print("🛑 Stopped recording")
+
+        window?.close()
+        window = nil
     }
 
     private func processMicBuffer(_ buffer: AVAudioPCMBuffer) {
@@ -265,10 +269,5 @@ public func stop_audio_recording() {
 
 @_cdecl("run_main_loop_for")
 public func run_main_loop_for(_ seconds: Double) {
-    let result = CFRunLoopRunInMode(.defaultMode, seconds, false)
-    if result == .finished {
-        print("✅ Run loop finished")
-    } else if result == .timedOut {
-        print("✅ Run loop timed out")
-    }
+    let _ = CFRunLoopRunInMode(.defaultMode, seconds, false)
 }
