@@ -58,8 +58,8 @@ fn main() {
     // Initialize MP3 Encoder
     let mut builder = Builder::new().expect("Create Encoder Builder");
     builder.set_num_channels(2).expect("set channels");
-    builder.set_sample_rate(44_100).expect("set sample rate");
-    builder.set_brate(mp3lame_encoder::Bitrate::Kbps192).expect("set bitrate");
+    builder.set_sample_rate(48000).expect("set sample rate");
+    builder.set_brate(mp3lame_encoder::Bitrate::Kbps320).expect("set bitrate");
     builder.set_quality(mp3lame_encoder::Quality::Best).expect("set quality");
 
     let encoder = builder.build().expect("To initialize MP3 encoder");

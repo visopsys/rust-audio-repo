@@ -169,42 +169,54 @@ import AppKit
         guard outputType == .audio, isRecording, CMSampleBufferIsValid(sampleBuffer) else { return }
 
         // 1. Set up converter if needed
-        if audioConverter == nil, let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) {
-            let inputFormat = AVAudioFormat(cmAudioFormatDescription: formatDescription)
+        guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) else { return }
+        let inputFormat = AVAudioFormat(cmAudioFormatDescription: formatDescription)
+
+        if audioConverter == nil || audioConverter?.inputFormat != inputFormat {
+            print("ℹ️ Input format changed: \(inputFormat)")
             audioConverter = AVAudioConverter(from: inputFormat, to: targetFormat)
         }
 
-        // 2. Convert
         guard let converter = audioConverter else { return }
 
-        // Create input block
-        var error: NSError? = nil
-        let inputBlock: AVAudioConverterInputBlock = { inNumPackets, outStatus in
-            outStatus.pointee = .haveData
-            return sampleBuffer
+        // 2. Create input buffer from CMSampleBuffer
+        let numSamples = CMSampleBufferGetNumSamples(sampleBuffer)
+        guard let inputBuffer = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: AVAudioFrameCount(numSamples)) else { return }
+        inputBuffer.frameLength = AVAudioFrameCount(numSamples)
+
+        // Copy data into the buffer
+        // Note: This assumes the CMSampleBuffer contains PCM data.
+        let success = CMSampleBufferCopyPCMDataIntoAudioBufferList(sampleBuffer,
+                                                                   at: 0,
+                                                                   frameCount: Int32(numSamples),
+                                                                   into: inputBuffer.mutableAudioBufferList)
+        if success != noErr {
+            print("❌ Failed to copy PCM data")
+            return
         }
 
-        // Calculate output buffer size (approximate)
-        // We need enough space for the converted data.
-        // Let's allocate a buffer if we haven't, or reuse it.
-        // For simplicity, let's allocate a new buffer each time or reuse a large enough one.
-        // A safer way is to estimate based on sample count.
-        let numSamples = CMSampleBufferGetNumSamples(sampleBuffer)
+        // 3. Convert
+        // Create output buffer
+        // We need to calculate the output size based on ratio of sample rates if they differ.
+        // Here we assume 44.1 -> 44.1, so 1:1 ratio.
         if pcmBuffer == nil || pcmBuffer!.frameCapacity < numSamples {
              pcmBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: AVAudioFrameCount(numSamples))
         }
-
         guard let outputBuffer = pcmBuffer else { return }
+
+        var error: NSError? = nil
+        let inputBlock: AVAudioConverterInputBlock = { inNumPackets, outStatus in
+            outStatus.pointee = .haveData
+            return inputBuffer
+        }
 
         let status = converter.convert(to: outputBuffer, error: &error, withInputFrom: inputBlock)
 
         if status != .error, let data = outputBuffer.int16ChannelData {
-             // int16ChannelData is UnsafePointer<UnsafeMutablePointer<Int16>>
-             // Since we requested interleaved, data[0] points to the interleaved data.
              let channelData = data[0]
              let byteLength = Int(outputBuffer.frameLength * targetFormat.streamDescription.pointee.mBytesPerFrame)
 
-             print("🎧 Audio buffer converted: \(byteLength) bytes")
+             // print("🎧 Audio buffer converted: \(byteLength) bytes")
              if let cb = GLOBAL_AUDIO_CALLBACK {
                  cb(UnsafeRawPointer(channelData), UInt32(byteLength))
              }
