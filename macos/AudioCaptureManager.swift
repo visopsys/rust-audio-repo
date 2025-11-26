@@ -1,13 +1,11 @@
 import Foundation
 import ScreenCaptureKit
 import AVFoundation
-import AppKit
 
 @objc public class AudioCaptureManager: NSObject, SCStreamOutput, SCStreamDelegate {
 
     private var stream: SCStream?
     private var isRecording = false
-    private var window: NSWindow?
 
     // Mixing
     private let audioEngine = AVAudioEngine()
@@ -35,19 +33,6 @@ import AppKit
         guard !isRecording else { return }
 
         do {
-            // Invisible AppKit window
-            if window == nil {
-                let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1, height: 1),
-                                 styleMask: [],
-                                 backing: .buffered,
-                                 defer: false)
-                w.alphaValue = 0
-                w.isOpaque = false
-                w.level = .mainMenu + 1
-                w.makeKeyAndOrderFront(nil)
-                window = w
-            }
-
             // 1. Start Microphone Capture
             let inputNode = audioEngine.inputNode
             let inputFormat = inputNode.inputFormat(forBus: 0)
@@ -94,9 +79,6 @@ import AppKit
 
         audioEngine.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
-
-        window?.close()
-        window = nil
     }
 
     private func processMicBuffer(_ buffer: AVAudioPCMBuffer) {
