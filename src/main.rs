@@ -1,11 +1,10 @@
 use std::slice;
-use std::thread;
-use std::time::Duration;
 
 extern "C" {
     fn set_audio_callback(cb: Option<extern "C" fn(*const u8, u32)>);
     fn start_audio_recording();
     fn stop_audio_recording();
+    fn run_main_loop_for(seconds: f64);
 }
 
 extern "C" fn on_audio(data: *const u8, len: u32) {
@@ -22,8 +21,9 @@ fn main() {
     unsafe { start_audio_recording() };
 
     // Run 15 seconds
-    thread::sleep(Duration::from_secs(15));
+    unsafe { run_main_loop_for(15.0) };
 
     unsafe { stop_audio_recording() };
+
     println!("🛑 Recording stopped. Check ~/merged_audio.m4a");
 }

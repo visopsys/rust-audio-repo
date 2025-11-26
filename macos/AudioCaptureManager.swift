@@ -203,3 +203,13 @@ public func stop_audio_recording() {
     globalRecorder?.stopRecording()
     globalRecorder = nil
 }
+
+@_cdecl("run_main_loop_for")
+public func run_main_loop_for(_ seconds: Double) {
+    let result = CFRunLoopRunInMode(.defaultMode, seconds, false)
+    if result == .finished {
+        print("✅ Run loop finished")
+    } else if result == .timedOut {
+        print("✅ Run loop timed out")
+    }
+}

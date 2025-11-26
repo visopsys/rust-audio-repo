@@ -8,7 +8,7 @@ fn main() {
         .args([
             "-emit-library",
             "-o", &format!("{}/libAudioCapture.dylib", out),
-            "swift/AudioCaptureManager.swift",
+            "macos/AudioCaptureManager.swift",
             "-framework", "AVFoundation",
             "-framework", "ScreenCaptureKit",
             "-framework", "CoreMedia",
