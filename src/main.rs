@@ -1,6 +1,8 @@
 use std::slice;
 use std::sync::{Mutex, OnceLock};
 use std::mem::MaybeUninit;
+use std::thread;
+use std::time::Duration;
 use mp3lame_encoder::{Builder, Encoder, FlushNoGap, InterleavedPcm};
 
 // Global encoder state
@@ -15,7 +17,6 @@ extern "C" {
     fn set_audio_callback(cb: Option<extern "C" fn(*const u8, u32)>);
     fn start_audio_recording();
     fn stop_audio_recording();
-    fn run_main_loop_for(seconds: f64);
 }
 
 extern "C" fn on_audio(data: *const u8, len: u32) {
@@ -134,7 +135,7 @@ fn main() {
     recorder.start_recording();
 
     // Run 10 seconds
-    unsafe { run_main_loop_for(10.0) };
+    thread::sleep(Duration::from_secs(10));
 
     recorder.stop_recording();
 }

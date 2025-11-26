@@ -28,7 +28,6 @@ import AVFoundation
         stop()
     }
 
-    @MainActor
     private func start() async {
         guard !isRecording else { return }
 
@@ -247,9 +246,4 @@ public func start_audio_recording() {
 public func stop_audio_recording() {
     globalRecorder?.stopRecording()
     globalRecorder = nil
-}
-
-@_cdecl("run_main_loop_for")
-public func run_main_loop_for(_ seconds: Double) {
-    let _ = CFRunLoopRunInMode(.defaultMode, seconds, false)
 }
